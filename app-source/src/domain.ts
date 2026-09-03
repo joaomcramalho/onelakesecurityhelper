@@ -1,4 +1,5 @@
 export type WorkspaceRole = 'none' | 'viewer' | 'contributor' | 'member' | 'admin'
+export type SemanticModelPermission = 'none' | 'read' | 'build' | 'write' | 'owner'
 
 export type RequestedAction =
   | 'open-lakehouse'
@@ -7,6 +8,10 @@ export type RequestedAction =
   | 'write-spark'
   | 'write-sql'
   | 'reshare-manage'
+  | 'view-report'
+  | 'query-semantic-model'
+  | 'build-report'
+  | 'refresh-semantic-model'
 
 export type Verdict = 'allowed' | 'denied' | 'filtered' | 'blocked'
 
@@ -35,6 +40,15 @@ export interface PermissionConfig {
   sqlMasking: boolean
   shortcut: 'none' | 'passthrough' | 'delegated'
   shortcutTargetAccess: boolean
+  semanticWorkspaceRole: WorkspaceRole
+  semanticModelPermission: SemanticModelPermission
+  reportRead: boolean
+  semanticModelIdentity: 'sso' | 'fixed'
+  fixedIdentitySourceAccess: boolean
+  semanticModelOwnerSourceAccess: boolean
+  semanticModelRls: boolean
+  semanticModelOls: boolean
+  semanticModelRoleAssigned: boolean
   action: RequestedAction
 }
 
@@ -88,5 +102,14 @@ export const defaultConfig: PermissionConfig = {
   sqlMasking: false,
   shortcut: 'none',
   shortcutTargetAccess: true,
+  semanticWorkspaceRole: 'none',
+  semanticModelPermission: 'read',
+  reportRead: true,
+  semanticModelIdentity: 'sso',
+  fixedIdentitySourceAccess: true,
+  semanticModelOwnerSourceAccess: true,
+  semanticModelRls: false,
+  semanticModelOls: false,
+  semanticModelRoleAssigned: true,
   action: 'query-sql',
 }

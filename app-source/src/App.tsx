@@ -1,17 +1,23 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   BookOpen, Check, ChevronRight, CircleAlert, Database, ExternalLink, Eye,
   FileKey, FlaskConical, GitBranch, KeyRound, LockKeyhole, RotateCcw,
   Settings2, ShieldCheck, Users, X,
 } from 'lucide-react'
 import './index.css'
-import { defaultConfig, type PermissionConfig, type RequestedAction, type WorkspaceRole } from './domain'
+import {
+  defaultConfig,
+  type PermissionConfig,
+  type RequestedAction,
+  type SemanticModelPermission,
+  type WorkspaceRole,
+} from './domain'
 import { evaluateAccess } from './evaluator'
 import { citations, ruleCards, SNAPSHOT_DATE } from './rules'
 import { scenarios } from './scenarios'
 
 type Page = 'overview' | 'simulator' | 'scenarios' | 'rules' | 'references'
-type TestTarget = 'onelake' | 'sql' | 'shortcut'
+type TestTarget = 'onelake' | 'sql' | 'semantic-model' | 'shortcut'
 
 const pages: { id: Page; label: string; icon: typeof ShieldCheck }[] = [
   { id: 'overview', label: 'Overview', icon: ShieldCheck },
@@ -28,13 +34,19 @@ const actions: { value: RequestedAction; label: string }[] = [
   { value: 'write-spark', label: 'Write through Spark/OneLake' },
   { value: 'write-sql', label: 'Write through SQL endpoint' },
   { value: 'reshare-manage', label: 'Reshare or manage permissions' },
+  { value: 'view-report', label: 'View an existing report' },
+  { value: 'query-semantic-model', label: 'Query or explore the semantic model' },
+  { value: 'build-report', label: 'Build a report or use XMLA' },
+  { value: 'refresh-semantic-model', label: 'Refresh or frame the semantic model' },
 ]
 
 const targetActions: Record<TestTarget, RequestedAction[]> = {
   onelake: ['open-lakehouse', 'read-onelake', 'write-spark', 'reshare-manage'],
   sql: ['query-sql', 'write-sql'],
+  'semantic-model': ['view-report', 'query-semantic-model', 'build-report', 'refresh-semantic-model'],
   shortcut: ['read-onelake', 'query-sql'],
 }
+const semanticActions = targetActions['semantic-model']
 
 const roleLabels: Record<WorkspaceRole, string> = {
   none: 'No workspace role',
@@ -42,6 +54,33 @@ const roleLabels: Record<WorkspaceRole, string> = {
   contributor: 'Contributor',
   member: 'Member',
   admin: 'Admin',
+}
+
+const semanticPermissionLabels: Record<SemanticModelPermission, string> = {
+  none: 'No explicit model permission',
+  read: 'Read',
+  build: 'Build',
+  write: 'Write',
+  owner: 'Owner',
+}
+
+const semanticPermissionRank: Record<SemanticModelPermission, number> = {
+  none: 0,
+  read: 1,
+  build: 2,
+  write: 3,
+  owner: 4,
+}
+
+const getEffectiveSemanticPermission = (config: PermissionConfig): SemanticModelPermission => {
+  const inherited = ['admin', 'member', 'contributor'].includes(config.semanticWorkspaceRole)
+    ? 'write'
+    : config.semanticWorkspaceRole === 'viewer'
+      ? 'read'
+      : 'none'
+  return semanticPermissionRank[inherited] > semanticPermissionRank[config.semanticModelPermission]
+    ? inherited
+    : config.semanticModelPermission
 }
 
 function Toggle({ checked, onChange, label, description }: {
@@ -59,6 +98,28 @@ function Toggle({ checked, onChange, label, description }: {
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
       <span className="switch" aria-hidden="true"><span /></span>
     </label>
+  )
+}
+
+function CollapsibleSection({ title, className = '', children }: {
+  title: ReactNode
+  className?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(true)
+
+  return (
+    <details
+      className={`field-group collapsible-section ${className}`.trim()}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="section-summary">
+        <h3>{title}</h3>
+        <ChevronRight className="section-chevron" size={18} aria-hidden="true" />
+      </summary>
+      <div className="section-content">{children}</div>
+    </details>
   )
 }
 
@@ -121,8 +182,8 @@ function Overview({ onSimulate }: { onSimulate: () => void }) {
   const layers = [
     { icon: Users, title: '1. Entra identity', text: 'Authentication and direct or group-derived assignments.' },
     { icon: KeyRound, title: '2. Fabric reachability', text: 'Workspace role or item Read makes the Lakehouse reachable.' },
-    { icon: Database, title: '3. Data authorization', text: 'OneLake roles or SQL permissions authorize the selected path.' },
-    { icon: Eye, title: '4. Effective scope', text: 'Table, folder, row, column, shortcut, and action constraints.' },
+    { icon: Database, title: '3. Data authorization', text: 'OneLake, SQL, or semantic-model permissions authorize the selected path.' },
+    { icon: Eye, title: '4. Effective scope', text: 'Table, row, column, model, shortcut, and action constraints.' },
   ]
   return (
     <section className="page-content">
@@ -130,7 +191,7 @@ function Overview({ onSimulate }: { onSimulate: () => void }) {
         <div>
           <span className="eyebrow">Permission dependencies, made visible</span>
           <h2>Access is a chain, not a single checkbox.</h2>
-          <p>See how identity, workspace roles, sharing, OneLake roles, SQL permissions, and shortcuts combine into an effective decision.</p>
+          <p>See how identity, workspace roles, sharing, OneLake roles, SQL permissions, semantic models, and shortcuts combine into an effective decision.</p>
           <button className="primary-button" onClick={onSimulate}>Open the simulator <ChevronRight size={17} /></button>
         </div>
         <div className="mini-result">
@@ -180,6 +241,14 @@ function AccessMap({ config, evaluation, activeTarget }: {
   const sqlUserGrant = oneLakeGrant
   const sqlDelegatedGrant = config.delegatedOwnerAccess && !config.sqlDenySelect && (elevated || config.readData || config.sqlSelect)
   const sqlGrant = config.sqlAccessMode === 'user' ? sqlUserGrant : sqlDelegatedGrant
+  const semanticTarget = activeTarget === 'semantic-model'
+  const modelPermission = getEffectiveSemanticPermission(config)
+  const requiredModelPermission: SemanticModelPermission =
+    config.action === 'build-report' ? 'build' : config.action === 'refresh-semantic-model' ? 'write' : 'read'
+  const modelGrant = semanticPermissionRank[modelPermission] >= semanticPermissionRank[requiredModelPermission]
+  const semanticSourceGrant = config.semanticModelIdentity === 'fixed'
+    ? config.fixedIdentitySourceAccess
+    : reachable && oneLakeGrant
   const isControlPlane = config.action === 'open-lakehouse' || config.action === 'reshare-manage'
   const sharingGrant = config.workspaceRole === 'admin' || config.workspaceRole === 'member' || config.reshare
   const routeAllowed = activeTarget === 'sql'
@@ -215,7 +284,110 @@ function AccessMap({ config, evaluation, activeTarget }: {
           config.readAll ? 'ReadAll' : '',
         ].filter(Boolean)
 
-  const nodes = [
+  const semanticNodes = [
+    {
+      id: 'principal',
+      icon: Users,
+      eyebrow: 'Principal',
+      title: config.viaGroup ? 'User via Entra group' : 'Direct user',
+      detail: config.authenticated ? 'Authenticated identity' : 'Authentication failed',
+      status: config.authenticated && config.fabricEnabled ? 'pass' : 'fail',
+      chips: [config.viaGroup ? 'Group-derived' : 'Direct assignment'],
+    },
+    {
+      id: 'semantic-model',
+      icon: Eye,
+      eyebrow: config.action === 'view-report' ? 'Report and model' : 'Semantic model',
+      title: 'Direct Lake on OneLake',
+      detail: modelGrant && (config.action !== 'view-report' || config.reportRead)
+        ? `${modelPermission} permission satisfies the action`
+        : 'Required report or model permission is missing',
+      status: modelGrant && (config.action !== 'view-report' || config.reportRead) ? 'pass' : 'fail',
+      chips: [
+        config.semanticWorkspaceRole !== 'none' ? `Model ${roleLabels[config.semanticWorkspaceRole]}` : '',
+        semanticPermissionLabels[modelPermission],
+        config.action === 'view-report' ? (config.reportRead ? 'Report Read' : 'No report Read') : '',
+      ].filter(Boolean),
+    },
+    {
+      id: 'effective-identity',
+      icon: KeyRound,
+      eyebrow: 'Source identity',
+      title: config.semanticModelIdentity === 'sso' ? 'Current user through SSO' : 'Fixed connection identity',
+      detail: config.semanticModelIdentity === 'sso'
+        ? 'Consumer permissions are checked at the source'
+        : 'Connection identity permissions are checked',
+      status: semanticSourceGrant ? 'pass' : 'fail',
+      chips: [config.semanticModelIdentity === 'sso' ? 'Microsoft Entra SSO' : 'Fixed identity'],
+    },
+    {
+      id: 'semantic-source',
+      icon: Database,
+      eyebrow: 'Source data',
+      title: 'Lakehouse / OneLake',
+      detail: semanticSourceGrant ? 'Effective identity can read the source' : 'Source or OneLake access is missing',
+      status: semanticSourceGrant ? ((config.rowFilter || config.hiddenColumns) ? 'filtered' : 'pass') : 'fail',
+      chips: config.semanticModelIdentity === 'fixed'
+        ? [config.fixedIdentitySourceAccess ? 'Fixed identity access' : 'No fixed identity access']
+        : [
+            config.workspaceRole !== 'none' ? roleLabels[config.workspaceRole] : '',
+            config.itemRead ? 'Source Read' : '',
+            config.oneLakeRead ? 'OneLake Read' : '',
+            config.readAll ? 'ReadAll' : '',
+          ].filter(Boolean),
+    },
+    ...(config.shortcut !== 'none'
+      ? [{
+          id: 'semantic-shortcut',
+          icon: GitBranch,
+          eyebrow: 'Source shortcut',
+          title: 'Shortcut target',
+          detail: config.shortcutTargetAccess ? 'Effective identity can reach the target' : 'Target access is missing',
+          status: config.shortcutTargetAccess ? 'pass' : 'fail',
+          chips: [config.shortcut, config.shortcutTargetAccess ? 'Target access' : 'No target access'],
+        }]
+      : []),
+    {
+      id: 'model-security',
+      icon: ShieldCheck,
+      eyebrow: 'Model security',
+      title: config.semanticModelRls || config.semanticModelOls ? 'Semantic-model RLS / OLS' : 'No model-level restrictions',
+      detail: (config.semanticModelRls || config.semanticModelOls) && semanticPermissionRank[modelPermission] >= semanticPermissionRank.write
+        ? 'Write or elevated role bypasses model rules'
+        : config.semanticModelRls || config.semanticModelOls
+          ? config.semanticModelRoleAssigned
+            ? 'Model rules intersect with OneLake access'
+            : config.semanticModelRls
+              ? 'No applicable RLS role'
+              : 'OLS role is not assigned'
+          : 'OneLake defines the data boundary',
+      status: (config.semanticModelRls || config.semanticModelOls) && semanticPermissionRank[modelPermission] < semanticPermissionRank.write
+        ? config.semanticModelRoleAssigned ? 'filtered' : config.semanticModelRls ? 'fail' : 'pass'
+        : 'pass',
+      chips: [
+        config.semanticModelRls ? 'Model RLS' : '',
+        config.semanticModelOls ? 'Model OLS' : '',
+        config.semanticModelRoleAssigned ? 'Role assigned' : '',
+      ].filter(Boolean).length
+        ? [
+            config.semanticModelRls ? 'Model RLS' : '',
+            config.semanticModelOls ? 'Model OLS' : '',
+            config.semanticModelRoleAssigned ? 'Role assigned' : 'No role',
+          ].filter(Boolean)
+        : ['No model rules'],
+    },
+    {
+      id: 'result',
+      icon: ShieldCheck,
+      eyebrow: 'Requested action',
+      title: actions.find((action) => action.value === config.action)?.label ?? config.action,
+      detail: evaluation.title,
+      status: evaluation.verdict === 'allowed' ? 'pass' : evaluation.verdict === 'filtered' ? 'filtered' : 'fail',
+      chips: [evaluation.verdict],
+    },
+  ]
+
+  const standardNodes = [
     {
       id: 'principal',
       icon: Users,
@@ -291,6 +463,7 @@ function AccessMap({ config, evaluation, activeTarget }: {
       chips: [evaluation.verdict],
     },
   ]
+  const nodes = semanticTarget ? semanticNodes : standardNodes
 
   return (
     <div className="access-map-card">
@@ -320,6 +493,7 @@ function AccessMap({ config, evaluation, activeTarget }: {
         })}
       </div>
       {config.viaGroup && <p className="map-note"><Users size={15} /> Group assignment changes where the grant comes from, not its strength. Overlapping or nested groups can still broaden the effective result.</p>}
+      {semanticTarget && <p className="map-note"><Eye size={15} /> Semantic-model permissions and source OneLake permissions are separate gates. The connection identity determines whose source access is evaluated.</p>}
     </div>
   )
 }
@@ -330,9 +504,11 @@ function Simulator({ config, set, reset, evaluation }: {
   reset: () => void
   evaluation: ReturnType<typeof evaluateAccess>
 }) {
-  const activeTarget: TestTarget = config.shortcut !== 'none'
-    ? 'shortcut'
-    : config.action === 'query-sql' || config.action === 'write-sql'
+  const activeTarget: TestTarget = semanticActions.includes(config.action)
+    ? 'semantic-model'
+    : config.shortcut !== 'none'
+      ? 'shortcut'
+      : config.action === 'query-sql' || config.action === 'write-sql'
       ? 'sql'
       : 'onelake'
   const availableActions = actions.filter((action) => targetActions[activeTarget].includes(action.value))
@@ -343,6 +519,8 @@ function Simulator({ config, set, reset, evaluation }: {
     } else if (target === 'sql') {
       set('shortcut', 'none')
       if (!targetActions.sql.includes(config.action)) set('action', 'query-sql')
+    } else if (target === 'semantic-model') {
+      if (!semanticActions.includes(config.action)) set('action', 'query-semantic-model')
     } else {
       if (config.shortcut === 'none') set('shortcut', 'passthrough')
       if (!targetActions.shortcut.includes(config.action)) set('action', 'read-onelake')
@@ -356,8 +534,7 @@ function Simulator({ config, set, reset, evaluation }: {
           <div><span className="eyebrow">Principal configuration</span><h2>Set the effective grants</h2></div>
           <button className="icon-button" onClick={reset} title="Reset simulator"><RotateCcw size={17} /></button>
         </div>
-        <div className="field-group">
-          <h3>What are you testing?</h3>
+        <CollapsibleSection title="What are you testing?">
           <div className="target-switcher" role="group" aria-label="Access path to test">
             <button type="button" className={activeTarget === 'onelake' ? 'target-button active' : 'target-button'} onClick={() => switchTarget('onelake')} aria-pressed={activeTarget === 'onelake'}>
               <Database size={18} />
@@ -371,42 +548,48 @@ function Simulator({ config, set, reset, evaluation }: {
               <GitBranch size={18} />
               <span><strong>Shortcut</strong><small>Source and target</small></span>
             </button>
+            <button type="button" className={activeTarget === 'semantic-model' ? 'target-button active' : 'target-button'} onClick={() => switchTarget('semantic-model')} aria-pressed={activeTarget === 'semantic-model'}>
+              <Eye size={18} />
+              <span><strong>Semantic model</strong><small>Direct Lake on OneLake</small></span>
+            </button>
           </div>
           <label className="select-label">Action to evaluate
             <select value={config.action} onChange={(event) => set('action', event.target.value as RequestedAction)}>
               {availableActions.map((action) => <option key={action.value} value={action.value}>{action.label}</option>)}
             </select>
           </label>
-        </div>
-        <div className="field-group">
-          <h3>Identity and workspace</h3>
+        </CollapsibleSection>
+        <CollapsibleSection title={activeTarget === 'semantic-model' ? 'Identity and source workspace' : 'Identity and workspace'}>
           <Toggle checked={config.authenticated} onChange={(value) => set('authenticated', value)} label="Entra authentication succeeds" />
           <Toggle checked={config.fabricEnabled} onChange={(value) => set('fabricEnabled', value)} label="Fabric access enabled" />
           <Toggle checked={config.viaGroup} onChange={(value) => set('viaGroup', value)} label="Permissions include group-derived grants" description="Includes nested group membership." />
-          <label className="select-label">Workspace role
+          <label className="select-label">{activeTarget === 'semantic-model' ? 'Source Lakehouse workspace role' : 'Workspace role'}
             <select value={config.workspaceRole} onChange={(event) => set('workspaceRole', event.target.value as WorkspaceRole)}>
               {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-        </div>
-        <div className="field-group">
-          <h3>Item and sharing</h3>
-          <Toggle checked={config.itemRead} onChange={(value) => set('itemRead', value)} label="Item Read" description="Makes the Lakehouse or SQL endpoint reachable." />
+        </CollapsibleSection>
+        <CollapsibleSection title={activeTarget === 'semantic-model' ? 'Source item permissions' : 'Item and sharing'}>
+          <Toggle checked={config.itemRead} onChange={(value) => set('itemRead', value)} label={activeTarget === 'semantic-model' ? 'Source item Read' : 'Item Read'} description={activeTarget === 'semantic-model' ? 'Required for the SSO user to reach the source Lakehouse.' : 'Makes the Lakehouse or SQL endpoint reachable.'} />
           <Toggle checked={config.readData} onChange={(value) => set('readData', value)} label="ReadData" description="Read through SQL/TDS." />
           <Toggle checked={config.readAll} onChange={(value) => set('readAll', value)} label="ReadAll" description="Read through OneLake APIs and Spark." />
           <Toggle checked={config.itemWrite} onChange={(value) => set('itemWrite', value)} label="Item Write" />
           <Toggle checked={config.reshare} onChange={(value) => set('reshare', value)} label="Explicit Reshare" />
-        </div>
-        <div className={activeTarget === 'onelake' || activeTarget === 'shortcut' ? 'field-group relevant-group' : 'field-group muted-group'}>
-          <h3>OneLake security</h3>
+        </CollapsibleSection>
+        <CollapsibleSection
+          title="OneLake security"
+          className={activeTarget === 'onelake' || activeTarget === 'shortcut' || activeTarget === 'semantic-model' ? 'relevant-group' : 'muted-group'}
+        >
           <Toggle checked={config.defaultReader} onChange={(value) => set('defaultReader', value)} label="DefaultReader role exists" />
           <Toggle checked={config.oneLakeRead} onChange={(value) => set('oneLakeRead', value)} label="Scoped OneLake Read role" />
           <Toggle checked={config.oneLakeReadWrite} onChange={(value) => set('oneLakeReadWrite', value)} label="Scoped OneLake ReadWrite role" />
           <Toggle checked={config.rowFilter} onChange={(value) => set('rowFilter', value)} label="Row filter applies" />
           <Toggle checked={config.hiddenColumns} onChange={(value) => set('hiddenColumns', value)} label="Columns are hidden" />
-        </div>
-        <div className={activeTarget === 'sql' || (activeTarget === 'shortcut' && config.action === 'query-sql') ? 'field-group relevant-group' : 'field-group muted-group'}>
-          <h3>SQL authorization</h3>
+        </CollapsibleSection>
+        <CollapsibleSection
+          title="SQL authorization"
+          className={activeTarget === 'sql' || (activeTarget === 'shortcut' && config.action === 'query-sql') ? 'relevant-group' : 'muted-group'}
+        >
           <label className="select-label">Table data access mode
             <select value={config.sqlAccessMode} onChange={(event) => set('sqlAccessMode', event.target.value as PermissionConfig['sqlAccessMode'])}>
               <option value="delegated">Delegated identity (SQL security)</option>
@@ -430,9 +613,11 @@ function Simulator({ config, set, reset, evaluation }: {
           ) : (
             <div className="mode-pointer"><ChevronRight size={16} /><span>Configure the effective table access in the <strong>OneLake security</strong> section above.</span></div>
           )}
-        </div>
-        <div className={activeTarget === 'shortcut' ? 'field-group relevant-group' : 'field-group muted-group'}>
-          <h3>Shortcut</h3>
+        </CollapsibleSection>
+        <CollapsibleSection
+          title="Shortcut"
+          className={activeTarget === 'shortcut' || activeTarget === 'semantic-model' ? 'relevant-group' : 'muted-group'}
+        >
           <label className="select-label">Shortcut mode
             <select value={config.shortcut} onChange={(event) => set('shortcut', event.target.value as PermissionConfig['shortcut'])}>
               <option value="none">No shortcut</option>
@@ -441,7 +626,38 @@ function Simulator({ config, set, reset, evaluation }: {
             </select>
           </label>
           {config.shortcut !== 'none' && <Toggle checked={config.shortcutTargetAccess} onChange={(value) => set('shortcutTargetAccess', value)} label="Target identity has access" />}
-        </div>
+        </CollapsibleSection>
+        <CollapsibleSection
+          title="Semantic model authorization"
+          className={activeTarget === 'semantic-model' ? 'relevant-group' : 'muted-group'}
+        >
+          <label className="select-label">Semantic-model workspace role
+            <select value={config.semanticWorkspaceRole} onChange={(event) => set('semanticWorkspaceRole', event.target.value as WorkspaceRole)}>
+              {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label className="select-label">Explicit semantic-model permission
+            <select value={config.semanticModelPermission} onChange={(event) => set('semanticModelPermission', event.target.value as SemanticModelPermission)}>
+              {Object.entries(semanticPermissionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          {config.action === 'view-report' && <Toggle checked={config.reportRead} onChange={(value) => set('reportRead', value)} label="Report Read" description="The report is a separate item from its semantic model." />}
+          <label className="select-label">Direct Lake query identity
+            <select value={config.semanticModelIdentity} onChange={(event) => set('semanticModelIdentity', event.target.value as PermissionConfig['semanticModelIdentity'])}>
+              <option value="sso">Current user (Microsoft Entra SSO)</option>
+              <option value="fixed">Fixed cloud-connection identity</option>
+            </select>
+          </label>
+          <div className="mode-summary">
+            <strong>{config.semanticModelIdentity === 'sso' ? 'The consumer must pass the source OneLake checks.' : 'The connection identity passes the source OneLake checks.'}</strong>
+            <span>{config.semanticModelIdentity === 'sso' ? 'Use the source workspace, item, and OneLake controls on this page.' : 'Consumers can query the model without direct Lakehouse access; model RLS/OLS can provide per-consumer restrictions.'}</span>
+          </div>
+          {config.semanticModelIdentity === 'fixed' && <Toggle checked={config.fixedIdentitySourceAccess} onChange={(value) => set('fixedIdentitySourceAccess', value)} label="Fixed identity can read the source" description="Includes source item reachability and the required OneLake table access." />}
+          {config.action === 'refresh-semantic-model' && <Toggle checked={config.semanticModelOwnerSourceAccess} onChange={(value) => set('semanticModelOwnerSourceAccess', value)} label="Semantic-model owner can read the source" description="Required for Direct Lake framing, regardless of who triggers refresh." />}
+          <Toggle checked={config.semanticModelRls} onChange={(value) => set('semanticModelRls', value)} label="Semantic-model RLS" />
+          <Toggle checked={config.semanticModelOls} onChange={(value) => set('semanticModelOls', value)} label="Semantic-model OLS" />
+          {(config.semanticModelRls || config.semanticModelOls) && <Toggle checked={config.semanticModelRoleAssigned} onChange={(value) => set('semanticModelRoleAssigned', value)} label="Applicable model role assigned" description="RLS users require a role; OLS applies only to users assigned to its secured role." />}
+        </CollapsibleSection>
       </div>
 
       <div className="result-column">
@@ -506,16 +722,16 @@ function ScenarioLab({ loadScenario }: { loadScenario: (config: PermissionConfig
 function RulesPage() {
   return (
     <section className="page-content">
-      <div className="intro-copy"><span className="eyebrow">Rules snapshot</span><h2>Six ideas prevent most access surprises</h2><p>These rules describe effective authorization for the modeled Lakehouse paths. Follow each source before using the model for a production decision.</p></div>
+      <div className="intro-copy"><span className="eyebrow">Rules snapshot</span><h2>Key ideas that prevent access surprises</h2><p>These rules describe effective authorization for the modeled Lakehouse and Direct Lake semantic-model paths. Follow each source before using the model for a production decision.</p></div>
       <div className="rules-grid">
         {ruleCards.map((rule, index) => (
           <article className="rule-card" key={rule.title}>
-            <span className="rule-index">0{index + 1}</span><h3>{rule.title}</h3><p>{rule.text}</p>
+            <span className="rule-index">{String(index + 1).padStart(2, '0')}</span><h3>{rule.title}</h3><p>{rule.text}</p>
             <a href={rule.citation.url} target="_blank" rel="noreferrer">{rule.citation.title} <ExternalLink size={13} /></a>
           </article>
         ))}
       </div>
-      <div className="caveat-card"><CircleAlert size={22} /><div><h3>Boundary of this simulator</h3><p>It does not connect to a tenant, resolve live Entra memberships, inspect sensitivity policies, or reproduce every engine limitation. Unsupported combinations are surfaced as blocked rather than guessed.</p></div></div>
+      <div className="caveat-card"><CircleAlert size={22} /><div><h3>Boundary of this simulator</h3><p>It does not connect to a tenant, resolve live Entra memberships, inspect sensitivity policies, or reproduce every engine limitation. Semantic-model evaluation covers Direct Lake on OneLake, not Import, DirectQuery, or Direct Lake on SQL. Unsupported combinations are surfaced as blocked rather than guessed.</p></div></div>
     </section>
   )
 }
@@ -539,6 +755,11 @@ function ReferencesPage() {
           <div><dt>ReadData</dt><dd>Read Lakehouse or Warehouse data through the SQL/TDS endpoint.</dd></div>
           <div><dt>ReadAll</dt><dd>Read Lakehouse data through OneLake APIs and Spark; can feed DefaultReader virtual membership.</dd></div>
           <div><dt>OneLake ReadWrite</dt><dd>Scoped OneLake read and write capability for an item reader; it cannot contain OneLake RLS or CLS.</dd></div>
+          <div><dt>Model Read</dt><dd>Consume and interact with existing content that queries a semantic model. It does not replace source access when Direct Lake uses SSO.</dd></div>
+          <div><dt>Model Build</dt><dd>Create reports, use Analyze in Excel or XMLA, and inspect semantic-model metadata and hidden fields.</dd></div>
+          <div><dt>Semantic-model RLS/OLS</dt><dd>Model-scoped row and object restrictions that Direct Lake intersects with OneLake security for Read and Build users.</dd></div>
+          <div><dt>SSO</dt><dd>Direct Lake checks the current user’s permission to reach and read the OneLake source.</dd></div>
+          <div><dt>Fixed identity</dt><dd>A configured cloud-connection identity reads the source for all consumers; model security can still distinguish consumers.</dd></div>
           <div><dt>Reshare</dt><dd>Permission to share an item onward without granting full workspace administration.</dd></div>
         </dl>
       </div>

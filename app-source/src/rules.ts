@@ -1,4 +1,4 @@
-export const SNAPSHOT_DATE = '1 September 2026'
+export const SNAPSHOT_DATE = '3 September 2026'
 
 export const citations = {
   permissionModel: {
@@ -43,6 +43,30 @@ export const citations = {
     url: 'https://learn.microsoft.com/en-us/fabric/onelake/security/sql-analytics-endpoint-onelake-security',
     note: 'User identity mode enforces OneLake roles for tables; delegated identity mode uses SQL security and the item owner identity for OneLake access.',
   },
+  directLakeSecurity: {
+    id: 'direct-lake-security',
+    title: 'Integrate Direct Lake Security',
+    url: 'https://learn.microsoft.com/en-us/fabric/fundamentals/direct-lake-security-integration',
+    note: 'Direct Lake on OneLake permission requirements, SSO and fixed identities, owner framing access, shortcuts, and layered OLS/RLS.',
+  },
+  semanticModelPermissions: {
+    id: 'semantic-model-permissions',
+    title: 'Semantic model permissions',
+    url: 'https://learn.microsoft.com/en-us/power-bi/connect-data/service-datasets-permissions',
+    note: 'Read, Build, Reshare, Write, and Owner capabilities; workspace inheritance; metadata access; and interaction with semantic-model RLS.',
+  },
+  readSecuredData: {
+    id: 'read-secured-data',
+    title: 'Read data secured with OneLake security',
+    url: 'https://learn.microsoft.com/en-us/fabric/onelake/security/read-secured-data',
+    note: 'Direct Lake on OneLake is an authorized engine that enforces OneLake row-level and column-level security.',
+  },
+  semanticModelRls: {
+    id: 'semantic-model-rls',
+    title: 'Row-level security with Power BI',
+    url: 'https://learn.microsoft.com/en-us/fabric/security/service-admin-row-level-security',
+    note: 'Semantic-model RLS role behavior and the elevated workspace roles for which model RLS is not enforced.',
+  },
 } as const
 
 export const ruleCards = [
@@ -80,5 +104,35 @@ export const ruleCards = [
     title: 'Shortcuts have two sides',
     text: 'Passthrough access is constrained by permissions at the shortcut and target. Delegated shortcuts use a configured target identity.',
     citation: citations.oneLakeModel,
+  },
+  {
+    title: 'Model and source access are separate',
+    text: 'Report or semantic-model Read makes the model reachable, but Direct Lake SSO also requires the current user to reach and read the source data.',
+    citation: citations.directLakeSecurity,
+  },
+  {
+    title: 'The connection chooses the source identity',
+    text: 'SSO checks the current user at OneLake. A fixed cloud-connection identity lets consumers query the model without direct source access.',
+    citation: citations.directLakeSecurity,
+  },
+  {
+    title: 'OneLake and model rules intersect',
+    text: 'OneLake roles are unioned first, then Direct Lake intersects that result with semantic-model RLS and OLS.',
+    citation: citations.directLakeSecurity,
+  },
+  {
+    title: 'Model rules are path-specific',
+    text: 'Semantic-model RLS and OLS restrict model queries only. Use OneLake security when the restriction must apply across Spark, SQL, and other engines.',
+    citation: citations.directLakeSecurity,
+  },
+  {
+    title: 'Write bypasses model security',
+    text: 'Model Write, ownership, and Contributor-or-higher roles in the model workspace bypass semantic-model RLS and OLS.',
+    citation: citations.semanticModelPermissions,
+  },
+  {
+    title: 'The model owner must reach the source',
+    text: 'Direct Lake checks the semantic-model owner’s source access during framing, regardless of who triggers the refresh.',
+    citation: citations.directLakeSecurity,
   },
 ] as const

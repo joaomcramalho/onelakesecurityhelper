@@ -11,6 +11,7 @@ An interactive educational website that explains how Microsoft Fabric and OneLak
 
 The simulator returns an effective-access result with an ordered decision trace, warnings, documentation links, and least-privilege guidance.
 
+https://joaomcramalho.github.io/onelakesecurityhelper/
 
 ## Important
 

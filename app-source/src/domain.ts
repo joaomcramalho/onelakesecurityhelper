@@ -25,9 +25,14 @@ export interface PermissionConfig {
   defaultReader: boolean
   rowFilter: boolean
   hiddenColumns: boolean
+  sqlAccessMode: 'user' | 'delegated'
+  delegatedOwnerAccess: boolean
   sqlSelect: boolean
   sqlWrite: boolean
   sqlDenySelect: boolean
+  sqlRowFilter: boolean
+  sqlHiddenColumns: boolean
+  sqlMasking: boolean
   shortcut: 'none' | 'passthrough' | 'delegated'
   shortcutTargetAccess: boolean
   action: RequestedAction
@@ -73,9 +78,14 @@ export const defaultConfig: PermissionConfig = {
   defaultReader: true,
   rowFilter: false,
   hiddenColumns: false,
+  sqlAccessMode: 'delegated',
+  delegatedOwnerAccess: true,
   sqlSelect: true,
   sqlWrite: false,
   sqlDenySelect: false,
+  sqlRowFilter: false,
+  sqlHiddenColumns: false,
+  sqlMasking: false,
   shortcut: 'none',
   shortcutTargetAccess: true,
   action: 'query-sql',

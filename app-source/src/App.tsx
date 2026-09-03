@@ -169,6 +169,161 @@ function Overview({ onSimulate }: { onSimulate: () => void }) {
   )
 }
 
+function AccessMap({ config, evaluation, activeTarget }: {
+  config: PermissionConfig
+  evaluation: ReturnType<typeof evaluateAccess>
+  activeTarget: TestTarget
+}) {
+  const elevated = ['admin', 'member', 'contributor'].includes(config.workspaceRole)
+  const reachable = config.workspaceRole !== 'none' || config.itemRead
+  const oneLakeGrant = elevated || config.oneLakeRead || config.oneLakeReadWrite || (config.defaultReader && config.readAll)
+  const sqlUserGrant = oneLakeGrant
+  const sqlDelegatedGrant = config.delegatedOwnerAccess && !config.sqlDenySelect && (elevated || config.readData || config.sqlSelect)
+  const sqlGrant = config.sqlAccessMode === 'user' ? sqlUserGrant : sqlDelegatedGrant
+  const isControlPlane = config.action === 'open-lakehouse' || config.action === 'reshare-manage'
+  const sharingGrant = config.workspaceRole === 'admin' || config.workspaceRole === 'member' || config.reshare
+  const routeAllowed = activeTarget === 'sql'
+    ? sqlGrant
+    : activeTarget === 'shortcut'
+      ? config.shortcutTargetAccess && (config.action === 'query-sql' ? sqlGrant : oneLakeGrant)
+      : config.action === 'open-lakehouse'
+        ? reachable
+        : config.action === 'reshare-manage'
+          ? sharingGrant
+        : config.action === 'write-spark'
+          ? elevated || config.itemWrite || (config.itemRead && config.oneLakeReadWrite)
+          : oneLakeGrant
+
+  const itemChips = [
+    config.workspaceRole !== 'none' ? roleLabels[config.workspaceRole] : '',
+    config.itemRead ? 'Item Read' : '',
+  ].filter(Boolean)
+  const routeChips = isControlPlane
+    ? (config.action === 'open-lakehouse'
+        ? itemChips
+        : [config.workspaceRole === 'admin' ? 'Admin' : '', config.workspaceRole === 'member' ? 'Member' : '', config.reshare ? 'Reshare' : ''].filter(Boolean))
+    : activeTarget === 'sql'
+    ? (config.sqlAccessMode === 'user'
+        ? ['User identity', config.oneLakeRead ? 'OneLake Read' : '', config.oneLakeReadWrite ? 'OneLake ReadWrite' : '', config.defaultReader && config.readAll ? 'DefaultReader' : ''].filter(Boolean)
+        : ['Delegated identity', config.readData ? 'ReadData' : '', config.sqlSelect ? 'GRANT SELECT' : '', config.sqlDenySelect ? 'DENY SELECT' : ''].filter(Boolean))
+    : activeTarget === 'shortcut'
+      ? [config.shortcut === 'passthrough' ? 'Passthrough' : 'Delegated', config.shortcutTargetAccess ? 'Target access' : 'No target access']
+      : [
+          config.oneLakeReadWrite ? 'OneLake ReadWrite' : '',
+          config.oneLakeRead ? 'OneLake Read' : '',
+          config.defaultReader && config.readAll ? 'DefaultReader + ReadAll' : '',
+          config.readAll ? 'ReadAll' : '',
+        ].filter(Boolean)
+
+  const nodes = [
+    {
+      id: 'principal',
+      icon: Users,
+      eyebrow: 'Principal',
+      title: config.viaGroup ? 'User via Entra group' : 'Direct user',
+      detail: config.authenticated ? 'Authenticated identity' : 'Authentication failed',
+      status: config.authenticated && config.fabricEnabled ? 'pass' : 'fail',
+      chips: [config.viaGroup ? 'Group-derived' : 'Direct assignment'],
+    },
+    {
+      id: 'lakehouse',
+      icon: Database,
+      eyebrow: 'Fabric item',
+      title: 'Workspace / Lakehouse',
+      detail: reachable ? 'Item is reachable' : 'Missing role or Item Read',
+      status: reachable ? 'pass' : 'fail',
+      chips: itemChips.length ? itemChips : ['No item grant'],
+    },
+    ...(activeTarget === 'shortcut'
+      ? [{
+          id: 'shortcut',
+          icon: GitBranch,
+          eyebrow: 'Shortcut',
+          title: 'Shortcut target',
+          detail: config.shortcutTargetAccess ? 'Target check passed' : 'Target access missing',
+          status: config.shortcutTargetAccess ? 'pass' : 'fail',
+          chips: routeChips,
+        }]
+      : []),
+    {
+      id: 'engine',
+      icon: isControlPlane ? KeyRound : activeTarget === 'sql' ? FileKey : Database,
+      eyebrow: 'Access path',
+      title: config.action === 'open-lakehouse'
+        ? 'Item visibility'
+        : config.action === 'reshare-manage'
+          ? 'Sharing controls'
+          : activeTarget === 'sql'
+            ? 'SQL analytics endpoint'
+            : activeTarget === 'shortcut'
+              ? (config.action === 'query-sql' ? 'SQL through shortcut' : 'OneLake through shortcut')
+              : 'OneLake / Spark',
+      detail: routeAllowed ? 'Effective grant applies' : 'Required grant is missing',
+      status: routeAllowed ? 'pass' : 'fail',
+      chips: isControlPlane
+        ? (routeChips.length ? routeChips : ['No control-plane grant'])
+        : activeTarget === 'shortcut'
+        ? (config.action === 'query-sql'
+            ? (config.sqlAccessMode === 'user'
+                ? ['User identity', config.oneLakeRead ? 'OneLake Read' : '', config.defaultReader && config.readAll ? 'DefaultReader' : ''].filter(Boolean)
+                : ['Delegated identity', config.readData ? 'ReadData' : '', config.sqlSelect ? 'SELECT' : '', config.sqlDenySelect ? 'DENY' : ''].filter(Boolean))
+            : [config.oneLakeRead ? 'Read' : '', config.oneLakeReadWrite ? 'ReadWrite' : '', config.readAll ? 'ReadAll' : ''].filter(Boolean))
+        : routeChips.length ? routeChips : ['No data grant'],
+    },
+    ...((config.action === 'query-sql' && config.sqlAccessMode === 'delegated')
+      ? [{
+          id: 'delegated-owner',
+          icon: KeyRound,
+          eyebrow: 'Backend identity',
+          title: 'Endpoint item owner',
+          detail: config.delegatedOwnerAccess ? 'Reads OneLake for the query' : 'Cannot read underlying OneLake data',
+          status: config.delegatedOwnerAccess ? 'pass' : 'fail',
+          chips: [config.delegatedOwnerAccess ? 'Owner OneLake access' : 'Owner access missing'],
+        }]
+      : []),
+    {
+      id: 'result',
+      icon: ShieldCheck,
+      eyebrow: 'Requested action',
+      title: actions.find((action) => action.value === config.action)?.label ?? config.action,
+      detail: evaluation.title,
+      status: evaluation.verdict === 'allowed' ? 'pass' : evaluation.verdict === 'filtered' ? 'filtered' : 'fail',
+      chips: [evaluation.verdict],
+    },
+  ]
+
+  return (
+    <div className="access-map-card">
+      <div className="panel-heading">
+        <div><span className="eyebrow">Permission flow</span><h2>How access reaches the resource</h2></div>
+        <span className="map-legend"><span className="legend-dot" /> Effective path</span>
+      </div>
+      <div className="access-map" aria-label="Visual permission flow">
+        {nodes.map((node, index) => {
+          const Icon = node.icon
+          return (
+            <div className="map-segment" key={node.id}>
+              <article className={`map-node map-${node.status}`}>
+                <div className="map-node-icon"><Icon size={20} /></div>
+                <div className="map-node-copy">
+                  <span>{node.eyebrow}</span>
+                  <strong>{node.title}</strong>
+                  <small>{node.detail}</small>
+                </div>
+                <div className="permission-chips">
+                  {node.chips.map((chip) => <span key={chip}>{chip}</span>)}
+                </div>
+              </article>
+              {index < nodes.length - 1 && <div className={`map-connector ${node.status === 'fail' ? 'connector-fail' : ''}`}><ChevronRight size={20} /></div>}
+            </div>
+          )
+        })}
+      </div>
+      {config.viaGroup && <p className="map-note"><Users size={15} /> Group assignment changes where the grant comes from, not its strength. Overlapping or nested groups can still broaden the effective result.</p>}
+    </div>
+  )
+}
+
 function Simulator({ config, set, reset, evaluation }: {
   config: PermissionConfig
   set: <K extends keyof PermissionConfig>(key: K, value: PermissionConfig[K]) => void
@@ -252,9 +407,29 @@ function Simulator({ config, set, reset, evaluation }: {
         </div>
         <div className={activeTarget === 'sql' || (activeTarget === 'shortcut' && config.action === 'query-sql') ? 'field-group relevant-group' : 'field-group muted-group'}>
           <h3>SQL authorization</h3>
-          <Toggle checked={config.sqlSelect} onChange={(value) => set('sqlSelect', value)} label="SQL GRANT SELECT" />
-          <Toggle checked={config.sqlWrite} onChange={(value) => set('sqlWrite', value)} label="SQL write grant" description="Shown for comparison; Lakehouse SQL endpoint writes remain unavailable." />
-          <Toggle checked={config.sqlDenySelect} onChange={(value) => set('sqlDenySelect', value)} label="SQL DENY SELECT" />
+          <label className="select-label">Table data access mode
+            <select value={config.sqlAccessMode} onChange={(event) => set('sqlAccessMode', event.target.value as PermissionConfig['sqlAccessMode'])}>
+              <option value="delegated">Delegated identity (SQL security)</option>
+              <option value="user">User identity (OneLake security)</option>
+            </select>
+          </label>
+          <div className="mode-summary">
+            <strong>{config.sqlAccessMode === 'delegated' ? 'SQL controls the user; the item owner reads OneLake.' : 'The signed-in user is passed through to OneLake.'}</strong>
+            <span>{config.sqlAccessMode === 'delegated' ? 'Use SQL grants, denies, roles, RLS, CLS, and masking for table access.' : 'Use the OneLake roles and row/column settings above. SQL table grants and denies do not apply.'}</span>
+          </div>
+          {config.sqlAccessMode === 'delegated' ? (
+            <>
+              <Toggle checked={config.delegatedOwnerAccess} onChange={(value) => set('delegatedOwnerAccess', value)} label="Endpoint owner can read OneLake" description="The backend item account reads the underlying files." />
+              <Toggle checked={config.sqlSelect} onChange={(value) => set('sqlSelect', value)} label="SQL GRANT SELECT" />
+              <Toggle checked={config.sqlWrite} onChange={(value) => set('sqlWrite', value)} label="SQL write grant" description="Shown for comparison; Lakehouse SQL endpoint writes remain unavailable." />
+              <Toggle checked={config.sqlDenySelect} onChange={(value) => set('sqlDenySelect', value)} label="SQL DENY SELECT" />
+              <Toggle checked={config.sqlRowFilter} onChange={(value) => set('sqlRowFilter', value)} label="SQL row-level security" />
+              <Toggle checked={config.sqlHiddenColumns} onChange={(value) => set('sqlHiddenColumns', value)} label="SQL column-level security" />
+              <Toggle checked={config.sqlMasking} onChange={(value) => set('sqlMasking', value)} label="Dynamic data masking" />
+            </>
+          ) : (
+            <div className="mode-pointer"><ChevronRight size={16} /><span>Configure the effective table access in the <strong>OneLake security</strong> section above.</span></div>
+          )}
         </div>
         <div className={activeTarget === 'shortcut' ? 'field-group relevant-group' : 'field-group muted-group'}>
           <h3>Shortcut</h3>
@@ -278,6 +453,7 @@ function Simulator({ config, set, reset, evaluation }: {
           </div>
           {evaluation.effectiveScope && <div className="scope-box"><strong>Effective scope</strong><span>{evaluation.effectiveScope}</span></div>}
         </div>
+        <AccessMap config={config} evaluation={evaluation} activeTarget={activeTarget} />
         <div className="trace-card">
           <div className="panel-heading"><div><span className="eyebrow">Decision trace</span><h2>Why this result?</h2></div></div>
           <div className="trace-list">

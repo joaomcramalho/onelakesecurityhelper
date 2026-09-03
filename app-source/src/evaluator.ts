@@ -153,15 +153,73 @@ export function evaluateAccess(config: PermissionConfig): EvaluationResult {
       status: 'pass',
       title: 'SQL connection prerequisite satisfied',
       detail: 'A workspace role or item Read is required before SQL permissions can be used.',
-      citation: 'sql-permissions',
+      citation: 'sql-access-modes',
     })
+
+    steps.push({
+      layer: 'SQL access mode',
+      status: 'info',
+      title: config.sqlAccessMode === 'user' ? 'User identity mode' : 'Delegated identity mode',
+      detail: config.sqlAccessMode === 'user'
+        ? 'The signed-in user identity is passed to OneLake, and OneLake security governs table access.'
+        : 'SQL authorizes the signed-in user, then the endpoint owner identity reads the underlying OneLake data.',
+      citation: 'sql-access-modes',
+    })
+
+    if (config.sqlAccessMode === 'user') {
+      const defaultRead = config.defaultReader && config.readAll
+      const canRead = elevated || config.oneLakeRead || config.oneLakeReadWrite || defaultRead
+      const restrictedReadOnly = config.oneLakeRead && !elevated && !config.oneLakeReadWrite && !defaultRead
+      if (config.readData || config.sqlSelect || config.sqlDenySelect || config.sqlRowFilter || config.sqlHiddenColumns || config.sqlMasking) {
+        warnings.push('ReadData and SQL table grants, denies, RLS, CLS, and masking do not govern table access in user identity mode; OneLake security is authoritative.')
+      }
+      steps.push({
+        layer: 'OneLake table authorization',
+        status: canRead ? 'pass' : 'fail',
+        title: canRead ? 'Signed-in user has OneLake table access' : 'Signed-in user lacks a OneLake data role',
+        detail: elevated
+          ? 'The elevated workspace role provides broad data access.'
+          : config.oneLakeReadWrite
+            ? 'A OneLake ReadWrite role includes table Read.'
+            : config.oneLakeRead
+              ? 'A scoped OneLake Read role includes the requested table.'
+              : defaultRead
+                ? 'DefaultReader applies because the user has ReadAll.'
+                : 'ReadData or SQL SELECT does not replace a OneLake table grant in user identity mode.',
+        citation: 'sql-access-modes',
+      })
+      if (!canRead) {
+        return result('denied', 'SQL query denied by OneLake', 'User identity mode requires the signed-in user to have an applicable OneLake role.', steps, warnings, 'Grant a scoped OneLake Read role or switch deliberately to delegated identity mode with SQL security.')
+      }
+      if ((config.rowFilter || config.hiddenColumns) && restrictedReadOnly) {
+        return result('filtered', 'SQL query is filtered by OneLake', 'The SQL endpoint passes the user identity through and enforces the OneLake role boundary.', steps, warnings, undefined, 'Rows and columns are restricted by the applicable OneLake role.')
+      }
+      if ((config.rowFilter || config.hiddenColumns) && !restrictedReadOnly) {
+        warnings.push('A broader OneLake or workspace grant means the restricted role is not the effective SQL table boundary.')
+      }
+      return result('allowed', 'SQL query allowed through user identity', 'The signed-in user satisfies item reachability and OneLake table authorization.', steps, warnings)
+    }
+
+    steps.push({
+      layer: 'Delegated OneLake identity',
+      status: config.delegatedOwnerAccess ? 'pass' : 'fail',
+      title: config.delegatedOwnerAccess ? 'Endpoint owner can read OneLake' : 'Endpoint owner lacks OneLake access',
+      detail: 'Delegated mode reads the underlying files with the Lakehouse or SQL endpoint owner identity, not the querying user.',
+      citation: 'sql-access-modes',
+    })
+    if (!config.delegatedOwnerAccess) {
+      return result('blocked', 'Delegated identity cannot reach OneLake', 'The SQL user may be authorized, but the endpoint owner cannot read the underlying OneLake data.', steps, warnings, 'Restore the item owner’s OneLake access or use user identity mode.')
+    }
+    if (config.oneLakeRead || config.oneLakeReadWrite || config.rowFilter || config.hiddenColumns) {
+      warnings.push('The querying user’s OneLake roles and policies do not govern table access through a delegated SQL endpoint.')
+    }
     if (config.sqlDenySelect) {
       steps.push({
         layer: 'SQL authorization',
         status: 'fail',
         title: 'SQL DENY SELECT applies',
         detail: 'The SQL deny prevents this query through the SQL analytics endpoint, even when another SQL grant exists.',
-        citation: 'sql-permissions',
+        citation: 'sql-access-modes',
       })
       warnings.push('This SQL DENY does not remove access through Spark or direct OneLake paths.')
       return result('denied', 'SQL query denied', 'An explicit SQL DENY blocks SELECT on this SQL path.', steps, warnings, 'Remove the SQL DENY or query through an intentionally authorized access path.')
@@ -178,15 +236,20 @@ export function evaluateAccess(config: PermissionConfig): EvaluationResult {
           : config.sqlSelect
             ? 'A granular SQL grant supplies SELECT.'
             : 'Item Read allows connection but does not itself grant table data.',
-      citation: 'sql-permissions',
+      citation: 'sql-access-modes',
     })
     if (!canSelect) {
       return result('denied', 'SQL query denied', 'The endpoint is reachable, but SELECT is not granted.', steps, warnings, 'Grant ReadData or a scoped SQL SELECT permission.')
     }
-    if ((config.rowFilter || config.hiddenColumns) && !elevated) {
-      return result('filtered', 'SQL query is filtered', 'SQL or OneLake security limits the rows or columns returned by this access path.', steps, warnings, undefined, 'The result set is restricted by configured row and column controls.')
+    if (config.sqlRowFilter || config.sqlHiddenColumns || config.sqlMasking) {
+      const scope = [
+        config.sqlRowFilter ? 'rows restricted by SQL security policy' : '',
+        config.sqlHiddenColumns ? 'columns restricted by SQL permissions' : '',
+        config.sqlMasking ? 'sensitive values dynamically masked' : '',
+      ].filter(Boolean).join('; ')
+      return result('filtered', 'SQL query is filtered by SQL security', 'Delegated identity mode applies SQL-native data protection after authorizing the user.', steps, warnings, undefined, scope)
     }
-    return result('allowed', 'SQL query allowed', 'The connection prerequisite and effective SELECT permission are both satisfied.', steps, warnings)
+    return result('allowed', 'SQL query allowed through delegated identity', 'SQL authorization succeeded and the endpoint owner can read the underlying OneLake data.', steps, warnings)
   }
 
   if (config.action === 'write-spark') {

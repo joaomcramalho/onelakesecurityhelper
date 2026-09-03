@@ -37,6 +37,12 @@ export const citations = {
     url: 'https://learn.microsoft.com/en-us/fabric/data-warehouse/sql-granular-permissions',
     note: 'Item Read or a workspace role is required to connect; SQL GRANT, REVOKE, DENY, and database roles refine SQL access.',
   },
+  sqlAccessModes: {
+    id: 'sql-access-modes',
+    title: 'OneLake Security for SQL analytics endpoints',
+    url: 'https://learn.microsoft.com/en-us/fabric/onelake/security/sql-analytics-endpoint-onelake-security',
+    note: 'User identity mode enforces OneLake roles for tables; delegated identity mode uses SQL security and the item owner identity for OneLake access.',
+  },
 } as const
 
 export const ruleCards = [
@@ -57,8 +63,13 @@ export const ruleCards = [
   },
   {
     title: 'SQL DENY stays in SQL',
-    text: 'T-SQL DENY can override SQL grants for SQL queries, but it is not a universal deny for Spark or direct OneLake access.',
-    citation: citations.sqlPermissions,
+    text: 'T-SQL DENY applies to table access in delegated identity mode. User identity mode instead uses OneLake roles for table authorization.',
+    citation: citations.sqlAccessModes,
+  },
+  {
+    title: 'SQL endpoints have two identities',
+    text: 'User identity mode passes the signed-in user to OneLake. Delegated mode authorizes the user in SQL, then reads OneLake using the endpoint owner identity.',
+    citation: citations.sqlAccessModes,
   },
   {
     title: 'ReadWrite has limits',

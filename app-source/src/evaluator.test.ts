@@ -42,6 +42,59 @@ describe('evaluateAccess', () => {
     expect(oneLakeResult.verdict).toBe('allowed')
   })
 
+  it('uses OneLake roles instead of SQL table permissions in user identity mode', () => {
+    const denied = evaluateAccess({
+      ...defaultConfig,
+      workspaceRole: 'viewer',
+      sqlAccessMode: 'user',
+      readData: true,
+      sqlSelect: true,
+      oneLakeRead: false,
+      action: 'query-sql',
+    })
+    const allowed = evaluateAccess({
+      ...defaultConfig,
+      workspaceRole: 'viewer',
+      sqlAccessMode: 'user',
+      oneLakeRead: true,
+      sqlDenySelect: true,
+      action: 'query-sql',
+    })
+
+    expect(denied.verdict).toBe('denied')
+    expect(allowed.verdict).toBe('allowed')
+    expect(allowed.warnings.some((warning) => warning.includes('do not govern table access'))).toBe(true)
+  })
+
+  it('requires the delegated endpoint owner to reach OneLake', () => {
+    const result = evaluateAccess({
+      ...defaultConfig,
+      sqlAccessMode: 'delegated',
+      delegatedOwnerAccess: false,
+      sqlSelect: true,
+      action: 'query-sql',
+    })
+
+    expect(result.verdict).toBe('blocked')
+    expect(result.title).toBe('Delegated identity cannot reach OneLake')
+  })
+
+  it('applies SQL-native filtering in delegated identity mode', () => {
+    const result = evaluateAccess({
+      ...defaultConfig,
+      sqlAccessMode: 'delegated',
+      delegatedOwnerAccess: true,
+      sqlSelect: true,
+      sqlRowFilter: true,
+      sqlMasking: true,
+      action: 'query-sql',
+    })
+
+    expect(result.verdict).toBe('filtered')
+    expect(result.effectiveScope).toContain('SQL security policy')
+    expect(result.effectiveScope).toContain('dynamically masked')
+  })
+
   it('returns filtered when a scoped reader has row or column controls', () => {
     const result = evaluateAccess({
       ...defaultConfig,

@@ -21,6 +21,12 @@ export const scenarios: Scenario[] = [
     config: { ...defaultConfig, workspaceRole: 'none', itemRead: true, readData: false, defaultReader: false, oneLakeRead: true, sqlSelect: true, sqlDenySelect: true, action: 'query-sql' },
   },
   {
+    id: 'sql-user-identity',
+    name: 'SQL with user identity',
+    description: 'The SQL endpoint passes the signed-in user to OneLake, so a OneLake role—not SQL SELECT—controls table access.',
+    config: { ...defaultConfig, workspaceRole: 'viewer', sqlAccessMode: 'user', readData: true, sqlSelect: false, oneLakeRead: true, rowFilter: true, action: 'query-sql' },
+  },
+  {
     id: 'group-broadening',
     name: 'Nested group broadens access',
     description: 'A group-derived Contributor role makes a custom restricted-reader role ineffective as a boundary.',
